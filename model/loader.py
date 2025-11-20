@@ -3,7 +3,7 @@ import tensorflow as tf
 from functools import lru_cache
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-BASE_MODEL_PATH = BASE_DIR / "model" / "battery_lstm_base.h5"
+BASE_MODEL_PATH = BASE_DIR / "model" / "battery_lstm.h5"
 
 
 def get_user_model_path(user_id: int) -> Path:
