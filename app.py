@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from schemas.battery import BatteryRequest, BatteryResponse
-from services.battery_service import handle_battery_request
+from service.battery_service import handle_battery_request
 
 app = FastAPI(title="RunPT-AI Service")
 
