@@ -22,20 +22,30 @@ jobs:
           echo "$EC2_KEY" > key.pem
           chmod 600 key.pem
 
-      - name: Copy Project to EC2
+      - name: Upload project to EC2
         run: |
-          ssh -o StrictHostKeyChecking=no \
-              -i key.pem \
-              ${EC2_USER}@${EC2_HOST} \
-              "mkdir -p ~/RunPT-AI"
+          ssh -o StrictHostKeyChecking=no -i key.pem ${EC2_USER}@${EC2_HOST} "mkdir -p ~/RunPT-AI"
+          scp -o StrictHostKeyChecking=no -i key.pem -r ./* ${EC2_USER}@${EC2_HOST}:~/RunPT-AI/
 
-          scp -o StrictHostKeyChecking=no \
-              -i key.pem -r ./* \
-              ${EC2_USER}@${EC2_HOST}:~/RunPT-AI/
-
-      - name: Restart service on EC2
+      - name: Install dependencies in venv
         run: |
-          ssh -o StrictHostKeyChecking=no \
-              -i key.pem \
-              ${EC2_USER}@${EC2_HOST} \
-              "sudo systemctl restart runpt || true"
+          ssh -o StrictHostKeyChecking=no -i key.pem ${EC2_USER}@${EC2_HOST} "
+            cd ~/RunPT-AI;
+
+            # venv 없으면 생성
+            if [ ! -d 'venv' ]; then
+              echo 'Creating venv...';
+              python3 -m venv venv;
+            fi
+
+            # venv 안에서 패키지 설치
+            ./venv/bin/pip install --upgrade pip;
+            ./venv/bin/pip install -r requirements.txt;
+          "
+
+      - name: Restart FastAPI service
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ${EC2_USER}@${EC2_HOST} "
+            sudo systemctl daemon-reload;
+            sudo systemctl restart runpt || true;
+          "
