@@ -159,3 +159,20 @@ def generate_recommendations(skill: dict, battery_score: float):
             })
 
     return recs[:3]
+
+def generate_beginner_recommendations():
+    """러닝 기록이 전혀 없는 사용자를 위한 기본 추천"""
+    return [
+        {
+            "type": "Easy Run",
+            "distance_km": 3.0,
+            "target_pace": "7:00",
+            "reason": "러닝이 처음인 사용자를 위한 가벼운 3km 러닝"
+        },
+        {
+            "type": "Easy Run",
+            "distance_km": 5.0,
+            "target_pace": "8:00",
+            "reason": "기초 체력 형성을 위한 여유로운 5km 러닝"
+        }
+    ]
