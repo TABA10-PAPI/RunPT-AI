@@ -37,7 +37,7 @@ def main():
 
     # model/ 디렉토리에 저장
     model_dir = Path(__file__).resolve().parent
-    save_path = model_dir / "battery_lstm.h5"
+    save_path = model_dir / "battery_lstm.keras"
     model.save(save_path)
     print(f"✅ 모델 저장 완료: {save_path}")
 
