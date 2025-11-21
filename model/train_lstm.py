@@ -1,46 +1,23 @@
-# model/train_lstm.py
+# 실제 훈련 시 네가 CSV 기반으로 데이터 넣으면 됨
 import numpy as np
 import tensorflow as tf
-from pathlib import Path
+from tensorflow.keras import layers
+from config.settings import BASE_MODEL_PATH
 
-# 윈도우/피처 설정
-WINDOW_SIZE = 7
-FEATURE_DIM = 6  # hr, hrv, pace, sleep_hours, distance_km, calories
-NUM_SAMPLES = 1000
+def train_sample_lstm():
+    X = np.random.rand(200, 7, 4)   # 7일 × 4개 feature
+    y = np.random.rand(200, 1)
 
+    model = tf.keras.Sequential([
+        layers.LSTM(32, return_sequences=False),
+        layers.Dense(16, activation="relu"),
+        layers.Dense(1, activation="sigmoid")  # 0~1 → 배터리 비율
+    ])
 
-def generate_dummy_data():
-    X = np.random.rand(NUM_SAMPLES, WINDOW_SIZE, FEATURE_DIM).astype("float32")
-    y = (np.random.rand(NUM_SAMPLES, 1) * 100.0).astype("float32")  # 0~100
-    return X, y
-
-
-def build_model():
-    model = tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(WINDOW_SIZE, FEATURE_DIM)),
-            tf.keras.layers.LSTM(64, return_sequences=False),
-            tf.keras.layers.Dense(32, activation="relu"),
-            tf.keras.layers.Dense(1, activation="linear", name="battery_score"),
-        ]
-    )
-    model.compile(optimizer="adam", loss="mse", metrics=["mae"])
-    return model
-
-
-def main():
-    X, y = generate_dummy_data()
-    model = build_model()
-    model.summary()
-
-    model.fit(X, y, epochs=5, batch_size=32, validation_split=0.2)
-
-    # model/ 디렉토리에 저장
-    model_dir = Path(__file__).resolve().parent
-    save_path = model_dir / "battery_lstm.keras"
-    model.save(save_path)
-    print(f"✅ 모델 저장 완료: {save_path}")
-
+    model.compile(optimizer="adam", loss="mse")
+    model.fit(X, y, epochs=5, batch_size=16)
+    model.save(BASE_MODEL_PATH)
+    print("Base LSTM model trained & saved.")
 
 if __name__ == "__main__":
-    main()
+    train_sample_lstm()
