@@ -27,16 +27,26 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i key.pem ${EC2_USER}@${EC2_HOST} "mkdir -p ~/RunPT-AI"
           scp -o StrictHostKeyChecking=no -i key.pem -r ./* ${EC2_USER}@${EC2_HOST}:~/RunPT-AI/
 
-      - name: Install dependencies in venv
+      - name: Setup Python 3.10 venv + install dependencies
         run: |
           ssh -o StrictHostKeyChecking=no -i key.pem ${EC2_USER}@${EC2_HOST} "
             cd ~/RunPT-AI;
 
-            # venv 없으면 생성
-            if [ ! -d 'venv' ]; then
-              echo 'Creating venv...';
-              python3 -m venv venv;
+            # python3.10 없으면 설치
+            if ! command -v python3.10 &> /dev/null
+            then
+              echo 'Installing Python 3.10...';
+              sudo apt update;
+              sudo apt install -y python3.10 python3.10-venv python3.10-distutils;
             fi
+
+            # 기존 venv 삭제 (TF 버전 충돌 방지)
+            if [ -d 'venv' ]; then
+              rm -rf venv;
+            fi
+
+            # Python 3.10 기반 venv 생성
+            python3.10 -m venv venv;
 
             # venv 안에서 패키지 설치
             ./venv/bin/pip install --upgrade pip;
