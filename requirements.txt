@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic
 numpy
-tensorflow
+tensorflow==2.12.0
+keras==2.12.0
 pytest
 httpx
