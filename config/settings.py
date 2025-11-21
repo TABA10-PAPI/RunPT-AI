@@ -1,11 +1,15 @@
-# config/settings.py
 from pathlib import Path
 
-# 프로젝트 루트 기준 경로 계산
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# 모델 파일 경로
-MODEL_PATH = BASE_DIR / "model" / "battery_lstm.h5"
+DATA_DIR = BASE_DIR / "data"
+RUNNING_DIR = DATA_DIR / "running"
+PROFILE_DIR = DATA_DIR / "profile"
+MODEL_DIR = BASE_DIR / "model"
 
-# 기타 설정 예시
-DEBUG = True
+# 디렉토리 생성
+RUNNING_DIR.mkdir(parents=True, exist_ok=True)
+PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+BASE_MODEL_PATH = MODEL_DIR / "battery_lstm.keras"
