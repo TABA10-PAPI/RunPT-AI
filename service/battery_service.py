@@ -14,8 +14,7 @@ def load_running_data(user_id: int):
     return json.loads(path.read_text())
 
 def extract_features(record):
-    pace_min, pace_sec = map(int, record["pace"].split(":"))
-    pace_total = pace_min * 60 + pace_sec
+    pace_total = record["pace_sec"]   # pace는 이제 초 단위로 저장됨
 
     return [
         record["distance"],
@@ -23,6 +22,7 @@ def extract_features(record):
         record["time_sec"],
         record["avg_hr"]
     ]
+
 
 def predict_battery(user_id: int):
     data = load_running_data(user_id)

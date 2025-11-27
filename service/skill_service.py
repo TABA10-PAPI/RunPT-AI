@@ -10,13 +10,12 @@ def get_skill_path(user_id: int) -> Path:
 def load_user_skill(user_id: int):
     path = get_skill_path(user_id)
     if not path.exists():
-        # 초기 기본 실력값
         return {
-            "avg_pace_sec": 360,      # 6:00 페이스
-            "max_distance": 5.0,      # 기본 최대거리
-            "weekly_distance": 0.0,   # 최근 주간 거리
-            "fatigue_level": 0.3,     # 기본 피로도
-            "consistency_score": 0.5  # 기본 꾸준함 점수
+            "avg_pace_sec": 360,
+            "max_distance": 5.0,
+            "weekly_distance": 0.0,
+            "fatigue_level": 0.3,
+            "consistency_score": 0.5
         }
     return json.loads(path.read_text())
 
@@ -29,34 +28,39 @@ def save_user_skill(user_id: int, skill: dict):
 def update_user_skill(user_id: int, new_run: dict):
     skill = load_user_skill(user_id)
 
-    # ------------------------------
-    # 1) Pace 파싱
-    # ------------------------------
-    pace_min, pace_sec = map(int, new_run["pace"].split(":"))
-    pace_total = pace_min * 60 + pace_sec
+    # pace_total → 이미 초 단위로 입력됨
+    pace_total = new_run["pace_sec"]
     distance = new_run["distance"]
 
-    # ------------------------------
-    # 2) 평균 페이스 업데이트
-    # ------------------------------
+    # 1) avg pace 업데이트
     skill["avg_pace_sec"] = (skill["avg_pace_sec"] * 0.7) + (pace_total * 0.3)
 
-    # ------------------------------
-    # 3) 최대 거리 업데이트
-    # ------------------------------
+    # 2) 최대 거리
     skill["max_distance"] = max(skill["max_distance"], distance)
 
-    # ------------------------------
-    # 4) 최근 주간 거리 (지수 평활)
-    # ------------------------------
+    # 3) 주간 거리 (지수 평활)
     skill["weekly_distance"] = skill["weekly_distance"] * 0.8 + distance * 0.2
 
-    # ------------------------------
-    # 5) 피로도 업데이트 (거리 기반)
-    # ------------------------------
-    fatigue_increase = (distance / 20) * 0.1  # 거리 비례 피로 증가
+    # 4) 피로도
+    fatigue_increase = (distance / 20) * 0.1
     skill["fatigue_level"] = skill["fatigue_level"] * 0.9 + fatigue_increase
-    skill["fatigue_level"] = min(1.0, max(0.0, skill["fatigue_level"]))  # 0~1 범위 제한
+    skill["fatigue_level"] = min(1.0, max(0.0, skill["fatigue_level"]))
 
-    # ------------------------------
-    # 6) 개선된 Consistency Score
+    # 5) 꾸준함 점수 개선된 버전
+    consistency = skill["consistency_score"]
+
+    consistency *= 0.99  # 자연 감소
+
+    if distance >= 1.0:
+        consistency += 0.01
+    else:
+        consistency += 0.003
+
+    if skill["fatigue_level"] > 0.8:
+        consistency -= 0.02
+
+    consistency = min(1.0, max(0.0, consistency))
+    skill["consistency_score"] = consistency
+
+    save_user_skill(user_id, skill)
+    return skill
