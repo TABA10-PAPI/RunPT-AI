@@ -1,3 +1,4 @@
+# schemas/battery_request.py
 from pydantic import BaseModel
 
 class BatteryRequest(BaseModel):
