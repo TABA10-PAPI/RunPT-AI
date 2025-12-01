@@ -1,5 +1,6 @@
+# schemas/battery_response.py
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List
 
 class RecommendedRun(BaseModel):
     type: str
@@ -9,4 +10,11 @@ class RecommendedRun(BaseModel):
 
 class BatteryResponse(BaseModel):
     battery_score: float
+    recommendations: List[RecommendedRun]
+
+class BatteryScoreResponse(BaseModel):
+    battery_score: float
+
+
+class RecommendationResponse(BaseModel):
     recommendations: List[RecommendedRun]
