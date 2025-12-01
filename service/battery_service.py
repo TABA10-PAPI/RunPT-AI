@@ -7,6 +7,16 @@ import numpy as np
 from config.settings import RUNNING_DIR
 from model.loader import load_user_model
 
+# ---------------------------
+# 날짜 정규화 함수
+# ---------------------------
+def clean_date(date_str: str) -> str:
+    """
+    YYYY-MM-DD만 추출 (ISO8601 포함 전체 형식 대응)
+    예: '2025-11-05T09:25:00Z' → '2025-11-05'
+    """
+    return date_str.split("T")[0]
+
 
 # ---------------------------
 # 파일 로드
@@ -26,16 +36,16 @@ def load_running_data(user_id: int):
 # 날짜 기반 Daily Summary 생성
 # ---------------------------
 def build_daily_records(data: list[dict], today: datetime, days: int = 7):
-    """
-    최근 7일치 날짜 기반 day-summary 기록 만들기.
-    러닝이 없는 날은 휴식일(distance=0)로 자동 생성.
-    """
-    # 날짜 파싱
     parsed = []
+
     for r in data:
         if "date" not in r:
             continue
-        d = datetime.strptime(r["date"], "%Y-%m-%d")
+        
+        # 날짜 정규화 적용
+        date_str = clean_date(r["date"])
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+
         parsed.append((d.date(), r))
 
     # 날짜 기준 정렬
@@ -46,20 +56,18 @@ def build_daily_records(data: list[dict], today: datetime, days: int = 7):
     for d, r in parsed:
         daily_map.setdefault(d, []).append(r)
 
-    # 오늘 기준 최근 7일 날짜
+    # 오늘 기준 7일 생성
     result = []
     for i in range(days):
         day = today.date() - timedelta(days=(days - 1 - i))
         sessions = daily_map.get(day, [])
 
         if sessions:
-            # 하루 여러 세션 → 합산 처리
             total_dist = sum(s["distance"] for s in sessions)
             total_time = sum(s["time_sec"] for s in sessions)
             avg_hr = sum(s["avg_hr"] for s in sessions) / len(sessions)
             pace_sec = total_time / total_dist if total_dist > 0 else 0.0
         else:
-            # 휴식일
             total_dist = 0.0
             total_time = 0.0
             avg_hr = 60.0
@@ -91,9 +99,7 @@ def extract_features(record):
 # ---------------------------
 # Domain Logic (규칙 기반)
 # ---------------------------
-
 def is_hard_run(record):
-    """러닝 세션 고강도 여부 판단"""
     if not record:
         return False
 
@@ -110,7 +116,6 @@ def is_hard_run(record):
 
 
 def compute_rest_days_daily(daily):
-    """Daily Summary 기반 휴식일 계산"""
     cnt = 0
     for r in reversed(daily):
         if r["distance"] == 0:
@@ -121,7 +126,6 @@ def compute_rest_days_daily(daily):
 
 
 def compute_daily_fatigue(daily):
-    """Daily Summary 기반 피로도 계산"""
     loads = []
     for r in daily:
         load = (r["distance"] * 0.4) + ((r["avg_hr"] / 200) * 0.6)
@@ -134,61 +138,54 @@ def compute_daily_fatigue(daily):
 
 
 def adjust_battery(raw, had_hard_run, rest_days, fatigue):
-    """AI raw 예측 → 규칙 보정"""
-
     battery = raw
 
-    # 1) 전날 고강도 운동 없으면 40 이하 금지
     if not had_hard_run and battery < 40:
         battery = 40.0
 
-    # 2) 하루 이상 쉬었다면 → 70 이상 추천
     if rest_days >= 1:
         if fatigue < 0.7 and battery < 70:
             battery = 70.0
         elif fatigue < 0.85 and battery < 60:
             battery = 60.0
 
-    # ⭐ 3) 2일 이상 휴식 → 90~100 자연 상승
     if rest_days >= 2:
         if fatigue < 0.5:
             battery = max(battery, 95)
         else:
             battery = max(battery, 90)
 
-    # 4) 평상시 미세 상향
     battery += 5
-
-    # 5) 0~100 범위로 제한
     battery = max(0, min(100, battery))
     return round(battery, 2)
 
 
+# ---------------------------
+# 배터리 예측
+# ---------------------------
 def predict_battery(user_id: int, date_str: str):
     data = load_running_data(user_id)
     if not data:
-        return 75.0, 0, 0.0, False  # battery, rest_days, fatigue, hard_run
+        return 75.0, 0, 0.0, False
 
-    today = datetime.strptime(date_str, "%Y-%m-%d")
+    today = datetime.strptime(clean_date(date_str), "%Y-%m-%d")
 
-    # 일단 day summary 생성
+    # 최근 7일 요약 생성
     daily = build_daily_records(data, today, days=7)
 
-    # LSTM 입력 구성
     features = np.array([extract_features(r) for r in daily])
     features = features.reshape(1, 7, 4)
 
-    # AI raw score
     model = load_user_model(user_id)
     raw_score = model.predict(features)[0][0]
     raw_battery = raw_score * 100
 
-    # Domain logic 계산
-    yesterday_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # 날짜 정규화 후 비교
     yesterday_session = None
     for r in reversed(data):
-        if r.get("date") == yesterday_date:
+        if clean_date(r.get("date", "")) == yesterday_str:
             yesterday_session = r
             break
 
@@ -205,17 +202,14 @@ def predict_battery(user_id: int, date_str: str):
 
     return final, rest_days, fatigue, had_hard_run
 
-def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_hard_run: bool):
-    """
-    배터리 점수 + 휴식일 + 피로도 + 하드런 여부 기반 설명 생성
-    """
 
-    # ---------------------------
-    # Reason 생성
-    # ---------------------------
+# ---------------------------
+# 배터리 설명 생성
+# ---------------------------
+def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_hard_run: bool):
+
     reasons = []
 
-    # 휴식일 기반
     if rest_days >= 3:
         reasons.append("최근 3일 이상 충분한 휴식을 취했습니다.")
     elif rest_days == 2:
@@ -225,11 +219,9 @@ def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_ha
     else:
         reasons.append("최근 며칠간 꾸준히 러닝을 수행했습니다.")
 
-    # 하드런 기반
     if had_hard_run:
         reasons.append("전날 고강도 운동을 수행하여 피로가 누적되었습니다.")
 
-    # 피로도 기반
     if fatigue >= 0.8:
         reasons.append("최근 러닝 강도와 심박 수준이 높아 피로도가 높은 상태입니다.")
     elif fatigue >= 0.5:
@@ -239,9 +231,6 @@ def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_ha
 
     reason_text = " ".join(reasons)
 
-    # ---------------------------
-    # Feedback 생성
-    # ---------------------------
     if battery >= 85:
         feedback = "오늘은 상태가 매우 좋습니다! 템포런이나 인터벌 같은 고강도 훈련도 가능합니다."
     elif battery >= 70:
