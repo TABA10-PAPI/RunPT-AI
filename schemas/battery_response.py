@@ -14,6 +14,8 @@ class BatteryResponse(BaseModel):
 
 class BatteryScoreResponse(BaseModel):
     battery_score: float
+    reason: str
+    feedback: str
 
 
 class RecommendationResponse(BaseModel):
