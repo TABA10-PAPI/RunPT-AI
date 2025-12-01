@@ -12,7 +12,8 @@ from service.battery_service import (
     explain_battery_score,
     predict_battery,
     load_running_data,
-    get_running_path
+    get_running_path,
+    compute_acute_fatigue  # ← 전날 피로도 기반 acute fatigue
 )
 
 from service.skill_service import load_user_skill, update_user_skill
@@ -22,6 +23,7 @@ from service.recommendation_engine import (
 )
 
 import json
+from datetime import datetime, timedelta
 
 app = FastAPI(title="RunPT-AI Prototype")
 
@@ -33,7 +35,6 @@ def _compute_battery_and_recommendations(req: BatteryRequest):
 
     user_id = req.user_id
     date_str = req.date
-
     runs = load_running_data(user_id)
 
     # 기록 없음 → 초보자 추천
@@ -49,10 +50,24 @@ def _compute_battery_and_recommendations(req: BatteryRequest):
     # 스킬 로드
     skill = load_user_skill(user_id)
 
-    # acute fatigue = 최근 일주일 피로도(fatigue)를 그대로 사용
-    acute_fatigue = fatigue
+    # ----------------------------
+    # 🔥 전날 러닝 기록 가져오기
+    # ----------------------------
+    yesterday = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_session = None
+    for r in reversed(runs):
+        if r.get("date", "")[:10] == yesterday:
+            yesterday_session = r
+            break
 
+    # ----------------------------
+    # 🔥 acute fatigue 계산
+    # ----------------------------
+    acute_fatigue = compute_acute_fatigue(yesterday_session)
+
+    # ----------------------------
     # 추천 생성
+    # ----------------------------
     rec_dicts = generate_recommendations(
         skill=skill,
         battery_score=battery_score,
@@ -83,7 +98,6 @@ def get_battery_score(req: BatteryRequest):
 
     battery_score, rest_days, fatigue, had_hard_run = predict_battery(req.user_id, req.date)
 
-    # 파라미터 이름 battery로 맞춤
     reason, feedback = explain_battery_score(
         battery=battery_score,
         rest_days=rest_days,
