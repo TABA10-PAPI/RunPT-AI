@@ -13,7 +13,7 @@ from service.battery_service import (
     predict_battery,
     load_running_data,
     get_running_path,
-    compute_accumulated_fatigue     # ← acute fatigue 계산 위해 추가
+    compute_daily_fatigue
 )
 
 from service.skill_service import load_user_skill, update_user_skill
@@ -52,7 +52,7 @@ def _compute_battery_and_recommendations(req: BatteryRequest):
     skill = load_user_skill(user_id)
 
     # acute fatigue 계산 (추천 엔진에 반드시 필요)
-    acute_fatigue = compute_accumulated_fatigue(runs)
+    acute_fatigue = compute_daily_fatigue(runs)
 
     # 추천 생성
     rec_dicts = generate_recommendations(
