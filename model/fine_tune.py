@@ -1,3 +1,4 @@
+# model/fine_tune.py
 import json
 from pathlib import Path
 
@@ -11,6 +12,7 @@ DATA_DIR = BASE_DIR / "data" / "users"
 BASE_MODEL_PATH = BASE_DIR / "model" / "battery_lstm_base.h5"
 
 WINDOW_SIZE = 7  # LSTM 입력 타임스텝 길이
+MIN_RECORDS_TO_TRAIN = 20  # 최소 20개 기록 있어야 파인튜닝 수행
 
 
 def get_user_model_path(user_id: int) -> Path:
@@ -37,30 +39,58 @@ def _load_flat_history(user_id: int):
     return flat
 
 
+def _get_target_from_window(window):
+    """
+    윈도우(SequenceItem 리스트)에서 마지막 날의 실제 배터리 값을 타깃으로 사용.
+    SequenceItem 안에 battery 또는 battery_score 같은 필드를 찾는다.
+    """
+
+    last = window[-1]
+
+    # 실제 사용하는 필드명을 탐색
+    val = getattr(last, "battery", None)
+    if val is None:
+        val = getattr(last, "battery_score", None)
+    if val is None:
+        val = getattr(last, "battery_raw", None)
+
+    if val is None:
+        return None
+
+    val = float(val)
+
+    # 0~100 → 0~1 스케일로 바꾸기
+    if val > 1.5:
+        val /= 100.0
+
+    # 0~1 범위로 제한
+    return max(0.0, min(1.0, val))
+
+
 def finetune_user_model(user_id: int, epochs: int = 1):
     """
     사용자별 전체 히스토리를 기반으로
-    - 슬라이딩 윈도우(길이 WINDOW_SIZE)들을 만들고
-    - base 모델 또는 기존 user 모델에서 시작해서
-    - 짧게라도 추가 학습을 수행한 뒤
+    - 기록이 20개 미만이면 파인튜닝하지 않는다.
+    - 슬라이딩 윈도우(길이 WINDOW_SIZE)를 만든다.
+    - base 모델 또는 user 모델에서 이어서 학습한다.
     - model/user_{id}_model.h5 로 저장.
 
-    *데이터가 부족하면 그냥 조용히 return 한다.*
+    *타깃 값은 사용자에게 실제로 제공한 'battery' 값이다.*
     """
-    flat = _load_flat_history(user_id)
 
-    # 러닝 데이터가 WINDOW_SIZE 개 미만이면 파인튜닝하지 않음
-    if len(flat) < WINDOW_SIZE:
-        print(f"[FINETUNE] Not enough data for user {user_id} (len={len(flat)})")
+    flat = _load_flat_history(user_id)
+    num_records = len(flat)
+
+    # ✔ 신규 조건: 20개 이상 기록이 있어야 파인튜닝한다
+    if num_records < MIN_RECORDS_TO_TRAIN:
+        print(f"[FINETUNE] User {user_id}: Not enough records ({num_records}). Need >= {MIN_RECORDS_TO_TRAIN}.")
         return
 
     X_list = []
     y_list = []
 
-    # 슬라이딩 윈도우 생성
-    # 예: flat 길이가 10, WINDOW_SIZE=7이면
-    # i=0 -> 0~6, i=1 -> 1~7, i=2 -> 2~8, i=3 -> 3~9 총 4개 윈도우
-    for i in range(len(flat) - WINDOW_SIZE + 1):
+    # ✔ 슬라이딩 윈도우 생성
+    for i in range(num_records - WINDOW_SIZE + 1):
         window = flat[i : i + WINDOW_SIZE]
 
         x = [
@@ -74,31 +104,35 @@ def finetune_user_model(user_id: int, epochs: int = 1):
             ]
             for s in window
         ]
+
+        # ✔ 마지막 날의 실제 배터리 값을 타깃으로 사용
+        y = _get_target_from_window(window)
+        if y is None:
+            continue
+
         X_list.append(x)
+        y_list.append(y)
 
-        # TODO: 실제 레이블(타겟)을 정의하면 여기서 넣으면 됨.
-        # 지금은 구조만 잡는 단계라 임시로 50.0 을 사용.
-        y_list.append(50.0)
-
+    # ✔ 유효 윈도우가 없으면 종료
     if not X_list:
-        print(f"[FINETUNE] No valid window for user {user_id}")
+        print(f"[FINETUNE] User {user_id}: No valid training windows (no target data).")
         return
 
-    X = np.array(X_list, dtype="float32")  # (num_samples, WINDOW_SIZE, 6)
-    y = np.array(y_list, dtype="float32")  # (num_samples,)
+    X = np.array(X_list, dtype="float32")                       # (num_samples, WINDOW_SIZE, 6)
+    y = np.array(y_list, dtype="float32").reshape(-1, 1)        # (num_samples, 1)
 
     user_model_path = get_user_model_path(user_id)
 
-    # 기존 사용자 모델이 있으면 그걸 이어서 학습, 없으면 base 모델에서 시작
+    # ✔ 기존 사용자 모델이 있으면 이어서 학습한다
     if user_model_path.exists():
+        print(f"[FINETUNE] User {user_id}: Continue training existing personal model.")
         model = tf.keras.models.load_model(user_model_path)
-        print(f"[FINETUNE] Continue training user model: {user_model_path}")
     else:
+        print(f"[FINETUNE] User {user_id}: Start finetuning from base model.")
         model = tf.keras.models.load_model(BASE_MODEL_PATH)
-        print(f"[FINETUNE] Start finetuning from base model for user {user_id}")
 
     model.compile(optimizer="adam", loss="mse")
     model.fit(X, y, batch_size=4, epochs=epochs, verbose=0)
 
     model.save(user_model_path)
-    print(f"[FINETUNE] Saved personalized model to: {user_model_path}")
+    print(f"[FINETUNE] User {user_id}: Saved personal model → {user_model_path}")
