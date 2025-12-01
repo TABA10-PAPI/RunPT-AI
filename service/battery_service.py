@@ -243,3 +243,35 @@ def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_ha
         feedback = "매우 피곤한 상태입니다. 오늘은 완전 휴식을 취하는 것이 좋습니다."
 
     return reason_text, feedback
+
+def compute_acute_fatigue(latest_run):
+    """전날 러닝 기반 단기 피로도 계산"""
+    if latest_run is None:
+        return 0.1  # 휴식일 → 피로도 매우 낮음
+
+    dist = latest_run["distance"]
+    hr = latest_run["avg_hr"]
+    pace = latest_run["pace_sec"]
+
+    # 기본 피로도
+    fatigue = 0.1
+
+    # 거리 기반
+    if dist >= 15:
+        fatigue += 0.5
+    elif dist >= 10:
+        fatigue += 0.3
+    elif dist >= 5:
+        fatigue += 0.1
+
+    # 심박 기반
+    if hr >= 165:
+        fatigue += 0.4
+    elif hr >= 150:
+        fatigue += 0.2
+
+    # interval / race 플래그
+    if latest_run.get("is_interval", False) or latest_run.get("is_race", False):
+        fatigue = max(fatigue, 0.8)
+
+    return min(1.0, fatigue)
