@@ -192,6 +192,7 @@ def predict_battery(user_id: int, date_str: str):
     had_hard_run = is_hard_run(yesterday_session)
     rest_days = compute_rest_days_daily(daily)
     fatigue = compute_daily_fatigue(daily)
+    fatigue = apply_rest_decay_weighted(daily, fatigue)
 
     final = adjust_battery(
         raw=raw_battery,
@@ -275,3 +276,30 @@ def compute_acute_fatigue(latest_run):
         fatigue = max(fatigue, 0.8)
 
     return min(1.0, fatigue)
+
+def apply_rest_decay_weighted(daily: list[dict], fatigue: float) -> float:
+    """
+    각 휴식일의 '최근일수 가중치' 기반 피로도 감소
+    daily: 최근 7일 (0: 가장 오래전, 6: 오늘)
+    """
+
+    rest_effect = 0.0
+
+    # daily[-1] = 오늘
+    # daily[-2] = 전날
+    # daily[-3] = 2일 전 ...
+
+    for idx in range(1, len(daily) + 1):
+        day_ago = idx
+        day_record = daily[-day_ago]
+
+        # 휴식일 판정
+        if day_record["distance"] == 0:
+            weight = 0.5 ** (day_ago - 1)   # 전날=1→0.5^0=1.0, 2일 전=0.5, 3일 전=0.25...
+            rest_effect += weight
+
+    # 최대 영향도 제한 (너무 많이 깎이지 않도록)
+    rest_effect = min(rest_effect, 0.9)
+
+    new_fatigue = fatigue * (1 - rest_effect)
+    return round(new_fatigue, 4)
