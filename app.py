@@ -1,4 +1,7 @@
 from fastapi import FastAPI
+from pydantic import BaseModel
+
+from schemas.add_user_request import AddUserRequest
 from schemas.battery_request import BatteryRequest
 from schemas.battery_response import (
     BatteryResponse,
@@ -20,6 +23,8 @@ from service.skill_service import load_user_skill, update_user_skill
 from service.recommendation_engine import (
     generate_recommendations,
     generate_beginner_recommendations,
+    save_user_skill,      # 🔥 추가
+    save_user_profile
 )
 
 import json
@@ -141,6 +146,35 @@ def save_running(req: RunningSaveRequest):
     return {
         "message": "Running saved",
         "updated_skill": skill
+    }
+
+# --------------------------------------------------------------------
+# API: 신규 유저 등록 (/add-user)
+# --------------------------------------------------------------------
+@app.post("/add-user")
+def add_user(req: AddUserRequest):
+    user_id = req.uid
+
+    # 1) 프로필 파일 저장
+    profile = {
+        "user_id": user_id,
+        "age": req.age,
+        "height": req.height,
+        "weight": req.weight,
+    }
+    save_user_profile(user_id, profile)
+
+    # 2) 스킬 파일에도 동일 정보 반영
+    skill = load_user_skill(user_id)
+    skill["age"] = req.age
+    skill["height"] = req.height
+    skill["weight"] = req.weight
+    save_user_skill(user_id, skill)
+
+    return {
+        "message": "User profile & skill initialized",
+        "user_id": user_id,
+        "profile": profile,
     }
 
 
