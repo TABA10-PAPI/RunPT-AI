@@ -2,15 +2,19 @@
 import json
 import csv
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
 from config.settings import BASE_MODEL_PATH, RUNNING_DIR
+from service.skill_service import get_user_static_features
+
 
 WINDOW_SIZE = 7  # LSTM 입력창 크기(최근 7회 러닝 또는 7일)
+FEATURE_DIM = 7  # distance, pace_sec, time_sec, avg_hr, age, height, weight
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 TRAIN_CSV_DIR = BASE_DIR / "data" / "csv"
 
@@ -18,16 +22,20 @@ TRAIN_CSV_DIR = BASE_DIR / "data" / "csv"
 # ---------------------------
 # 공통 Feature 추출
 # ---------------------------
-def _extract_features(record: Dict) -> List[float]:
+def _extract_features(record: Dict, static: Dict[str, float]) -> List[float]:
     """
-    features = [distance, pace_sec, time_sec, avg_hr]
+    features = [distance, pace_sec, time_sec, avg_hr, age, height, weight]
     """
     distance = float(record.get("distance", 0.0))
     pace_sec = float(record.get("pace_sec", 360.0))
     time_sec = float(record.get("time_sec", distance * pace_sec))
     avg_hr = float(record.get("avg_hr", 140.0))
 
-    return [distance, pace_sec, time_sec, avg_hr]
+    age = float(static.get("age", 30))
+    height = float(static.get("height", 170))
+    weight = float(static.get("weight", 65))
+
+    return [distance, pace_sec, time_sec, avg_hr, age, height, weight]
 
 
 def _heuristic_battery_target(window: List[Dict]) -> float:
@@ -55,20 +63,30 @@ def _heuristic_battery_target(window: List[Dict]) -> float:
 # ---------------------------
 # JSON 러닝 데이터 로딩
 # ---------------------------
-def _load_all_running_sessions() -> List[List[Dict]]:
+def _load_all_running_sessions() -> List[Tuple[Optional[int], List[Dict]]]:
     """
-    RUNNING_DIR/user_*.json 파일 모두 읽어서 세션 리스트 반환
+    RUNNING_DIR/user_*.json 파일 모두 읽어서
+    (user_id, 세션 리스트) 형태로 반환
     """
     running_dir = Path(RUNNING_DIR)
     if not running_dir.exists():
         return []
 
-    sessions = []
+    sessions: List[Tuple[Optional[int], List[Dict]]] = []
     for path in running_dir.glob("user_*.json"):
         try:
+            stem = path.stem  # 예: "user_123"
+            user_id: Optional[int] = None
+            if "_" in stem:
+                uid_part = stem.split("_", 1)[1]
+                try:
+                    user_id = int(uid_part)
+                except ValueError:
+                    user_id = None
+
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list) and data:
-                sessions.append(data)
+                sessions.append((user_id, data))
         except Exception as e:
             print(f"[TRAIN] Failed reading {path}: {e}")
     return sessions
@@ -76,24 +94,31 @@ def _load_all_running_sessions() -> List[List[Dict]]:
 
 def build_dataset_from_running(window_size: int = WINDOW_SIZE):
     sessions = _load_all_running_sessions()
-    X_list = []
-    y_list = []
+    X_list: List[np.ndarray] = []
+    y_list: List[np.ndarray] = []
 
-    for session in sessions:
+    for user_id, session in sessions:
         if len(session) < window_size:
             continue
 
+        # 유저 정적 특성 (age/height/weight) 로드
+        if user_id is not None:
+            static = get_user_static_features(user_id)
+        else:
+            static = {"age": 30, "height": 170, "weight": 65}
+
         for i in range(len(session) - window_size + 1):
             window = session[i: i + window_size]
-            X_list.append([_extract_features(r) for r in window])
-            y_list.append(_heuristic_battery_target(window))
+            feat_window = [_extract_features(r, static) for r in window]
+            X_list.append(np.array(feat_window, dtype="float32"))
+            y_list.append(np.array([_heuristic_battery_target(window)], dtype="float32"))
 
     if not X_list:
         print("[TRAIN] No valid windows from JSON.")
         return None, None
 
-    X = np.array(X_list, dtype="float32")
-    y = np.array(y_list, dtype="float32").reshape(-1, 1)
+    X = np.stack(X_list, axis=0)          # (N, WINDOW_SIZE, FEATURE_DIM)
+    y = np.stack(y_list, axis=0)          # (N, 1)
     print(f"[TRAIN] JSON dataset: X={X.shape}, y={y.shape}")
     return X, y
 
@@ -101,7 +126,11 @@ def build_dataset_from_running(window_size: int = WINDOW_SIZE):
 # ---------------------------
 # CSV 데이터 로딩
 # ---------------------------
-def _load_csv_sequences() -> List[List[Dict]]:
+def _load_csv_sequences() -> List[Tuple[Optional[int], List[Dict]]]:
+    """
+    CSV에서 user_id별로 레코드를 모아서
+    (user_id, seq) 리스트로 반환
+    """
     sequences_by_user: Dict[str, List[Dict]] = {}
 
     if not TRAIN_CSV_DIR.exists():
@@ -117,12 +146,20 @@ def _load_csv_sequences() -> List[List[Dict]]:
         except Exception as e:
             print(f"[TRAIN] CSV load error {path}: {e}")
 
-    # 날짜 정렬
-    for uid, seq in sequences_by_user.items():
+    result: List[Tuple[Optional[int], List[Dict]]] = []
+    for uid_str, seq in sequences_by_user.items():
+        # 날짜 정렬
         if seq and "date" in seq[0]:
             seq.sort(key=lambda r: r["date"])
 
-    return list(sequences_by_user.values())
+        try:
+            user_id: Optional[int] = int(uid_str)
+        except (TypeError, ValueError):
+            user_id = None
+
+        result.append((user_id, seq))
+
+    return result
 
 
 def _get_csv_target(window: List[Dict]) -> Optional[float]:
@@ -141,7 +178,7 @@ def _get_csv_target(window: List[Dict]) -> Optional[float]:
 
     try:
         v = float(val)
-    except:
+    except Exception:
         return None
 
     if v > 1.5:  # 0~100 scale
@@ -152,12 +189,18 @@ def _get_csv_target(window: List[Dict]) -> Optional[float]:
 
 def build_dataset_from_csv(window_size: int = WINDOW_SIZE):
     sequences = _load_csv_sequences()
-    X_list = []
-    y_list = []
+    X_list: List[np.ndarray] = []
+    y_list: List[np.ndarray] = []
 
-    for seq in sequences:
+    for user_id, seq in sequences:
         if len(seq) < window_size:
             continue
+
+        # 유저 정적 특성 (age/height/weight) 로드
+        if user_id is not None:
+            static = get_user_static_features(user_id)
+        else:
+            static = {"age": 30, "height": 170, "weight": 65}
 
         for i in range(len(seq) - window_size + 1):
             window = seq[i: i + window_size]
@@ -168,8 +211,10 @@ def build_dataset_from_csv(window_size: int = WINDOW_SIZE):
                     "distance": float(row.get("distance", 0.0)),
                     "pace_sec": float(row.get("pace_sec", 360.0)),
                     "time_sec": float(
-                        row.get("time_sec",
-                                float(row.get("distance", 0.0)) * float(row.get("pace_sec", 360.0)))
+                        row.get(
+                            "time_sec",
+                            float(row.get("distance", 0.0)) * float(row.get("pace_sec", 360.0))
+                        )
                     ),
                     "avg_hr": float(row.get("avg_hr", 140.0)),
                 }
@@ -179,15 +224,16 @@ def build_dataset_from_csv(window_size: int = WINDOW_SIZE):
             if target is None:
                 continue
 
-            X_list.append([_extract_features(r) for r in records])
-            y_list.append(target)
+            feat_window = [_extract_features(r, static) for r in records]
+            X_list.append(np.array(feat_window, dtype="float32"))
+            y_list.append(np.array([target], dtype="float32"))
 
     if not X_list:
         print("[TRAIN] No CSV windows found.")
         return None, None
 
-    X = np.array(X_list, dtype="float32")
-    y = np.array(y_list, dtype="float32").reshape(-1, 1)
+    X = np.stack(X_list, axis=0)      # (N, WINDOW_SIZE, FEATURE_DIM)
+    y = np.stack(y_list, axis=0)      # (N, 1)
     print(f"[TRAIN] CSV dataset: X={X.shape}, y={y.shape}")
     return X, y
 
@@ -196,8 +242,8 @@ def build_dataset_from_csv(window_size: int = WINDOW_SIZE):
 # 메인 학습 로직
 # ---------------------------
 def train_sample_lstm():
-    X_list = []
-    y_list = []
+    X_list: List[np.ndarray] = []
+    y_list: List[np.ndarray] = []
 
     # JSON 데이터 우선 사용
     X_run, y_run = build_dataset_from_running()
@@ -208,6 +254,7 @@ def train_sample_lstm():
     # CSV 부족하면 보충
     X_csv, y_csv = build_dataset_from_csv()
     if X_csv is not None:
+        # JSON 데이터가 없거나, 샘플 수가 너무 적으면 CSV도 추가
         if not X_list or X_run.shape[0] < 200:
             X_list.append(X_csv)
             y_list.append(y_csv)
@@ -219,12 +266,12 @@ def train_sample_lstm():
         print(f"[TRAIN] Final dataset X={X.shape}, y={y.shape}")
     else:
         print("[TRAIN] No real data → fallback to random")
-        X = np.random.rand(200, WINDOW_SIZE, 4).astype("float32")
+        X = np.random.rand(200, WINDOW_SIZE, FEATURE_DIM).astype("float32")
         y = np.random.rand(200, 1).astype("float32")
 
     # 모델 정의
     model = tf.keras.Sequential([
-        layers.Input(shape=(WINDOW_SIZE, 4)),
+        layers.Input(shape=(WINDOW_SIZE, FEATURE_DIM)),
         layers.LSTM(32, return_sequences=False),
         layers.Dense(16, activation="relu"),
         layers.Dense(1, activation="sigmoid")
