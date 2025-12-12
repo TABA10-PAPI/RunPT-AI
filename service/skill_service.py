@@ -27,8 +27,74 @@ DEFAULT_SKILL = {
     "weekly_distance": 0.0,       # km 단위, 지수평활된 값
     "training_load": 0.2,         # 0~1 (chronic load)
     "fatigue_level": 0.2,         # training_load와 동일(호환용)
-    "consistency_score": 0.5      # 0~1
+    "consistency_score": 0.5,     # 0~1
+
+    # 🔥 새로 추가: 정적 특성
+    # None이면 아직 /add-user를 안 탄 상태라고 보고, 모델 입력시 기본값으로 치환
+    "age": None,                  # 나이 (int)
+    "height": None,               # 키 (cm)
+    "weight": None,               # 몸무게 (kg)
 }
+
+# 유저 기본 프로필 (정적 특성)
+DEFAULT_PROFILE = {
+    "user_id": None,
+    "age": None,
+    "height": None,
+    "weight": None,
+}
+
+
+def get_profile_path(user_id: int) -> Path:
+    """user_{id}_profile.json 위치"""
+    return PROFILE_DIR / f"user_{user_id}_profile.json"
+
+
+def load_user_profile(user_id: int) -> dict:
+    """
+    유저 프로필 로드.
+    없으면 기본값 + user_id 세팅해서 반환.
+    """
+    path = get_profile_path(user_id)
+    if not path.exists():
+        prof = deepcopy(DEFAULT_PROFILE)
+        prof["user_id"] = user_id
+        return prof
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        prof = deepcopy(DEFAULT_PROFILE)
+        prof["user_id"] = user_id
+        return prof
+
+    prof = deepcopy(DEFAULT_PROFILE)
+    if isinstance(data, dict):
+        prof.update(data)
+
+    prof["user_id"] = user_id
+    return prof
+
+
+def save_user_profile(user_id: int, profile: dict):
+    """
+    유저 프로필 저장 (/add-user 에서 사용).
+    age/height/weight는 int 또는 None 으로 정리해서 저장.
+    """
+    base = deepcopy(DEFAULT_PROFILE)
+    base["user_id"] = user_id
+    if profile:
+        base.update(profile)
+
+    for key in ("age", "height", "weight"):
+        val = base.get(key)
+        try:
+            base[key] = int(val) if val is not None else None
+        except (TypeError, ValueError):
+            base[key] = None
+
+    path = get_profile_path(user_id)
+    path.write_text(json.dumps(base, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def get_skill_path(user_id: int) -> Path:
@@ -214,3 +280,39 @@ def update_user_skill(user_id: int, new_run: dict) -> dict:
     # ---------------------------
     save_user_skill(user_id, skill)
     return skill
+
+def get_user_static_features(user_id: int) -> dict:
+    """
+    LSTM 입력용 유저 정적 특성(나이, 키, 몸무게)을 반환.
+    - profile 에 값이 있으면 우선
+    - 없으면 skill 파일에 있는 값 사용
+    - 둘 다 없으면 안전한 기본값 (30/170/65) 사용
+    """
+    profile = load_user_profile(user_id)
+    skill = load_user_skill(user_id)
+
+    def _pick(key: str):
+        v = profile.get(key)
+        if v in (None, 0, "0", ""):
+            v = skill.get(key)
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    age = _pick("age")
+    height = _pick("height")
+    weight = _pick("weight")
+
+    if age is None:
+        age = 30
+    if height is None:
+        height = 170
+    if weight is None:
+        weight = 65
+
+    return {
+        "age": age,
+        "height": height,
+        "weight": weight,
+    }
