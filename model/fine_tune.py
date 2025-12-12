@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 
 from schemas.battery import SequenceItem  # 타입 재사용 (편의용)
+from service.skill_service import get_user_static_features
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "users"
@@ -76,6 +77,10 @@ def finetune_user_model(user_id: int, epochs: int = 1):
     - model/user_{id}_model.h5 로 저장.
 
     *타깃 값은 사용자에게 실제로 제공한 'battery' 값이다.*
+
+    입력 feature:
+    [hr, hrv, pace, sleep_hours, distance_km, calories, age, height, weight]
+    → 총 9차원
     """
 
     flat = _load_flat_history(user_id)
@@ -83,24 +88,36 @@ def finetune_user_model(user_id: int, epochs: int = 1):
 
     # ✔ 신규 조건: 20개 이상 기록이 있어야 파인튜닝한다
     if num_records < MIN_RECORDS_TO_TRAIN:
-        print(f"[FINETUNE] User {user_id}: Not enough records ({num_records}). Need >= {MIN_RECORDS_TO_TRAIN}.")
+        print(
+            f"[FINETUNE] User {user_id}: Not enough records "
+            f"({num_records}). Need >= {MIN_RECORDS_TO_TRAIN}."
+        )
         return
+
+    # 🔥 유저 정적 특성 로드 (나이/키/몸무게)
+    static = get_user_static_features(user_id)
+    age = float(static.get("age", 30))
+    height = float(static.get("height", 170))
+    weight = float(static.get("weight", 65))
 
     X_list = []
     y_list = []
 
     # ✔ 슬라이딩 윈도우 생성
     for i in range(num_records - WINDOW_SIZE + 1):
-        window = flat[i : i + WINDOW_SIZE]
+        window = flat[i: i + WINDOW_SIZE]
 
         x = [
             [
-                s.hr,
-                s.hrv,
-                s.pace,
-                s.sleep_hours,
-                s.distance_km,
-                s.calories,
+                float(s.hr),
+                float(s.hrv),
+                float(s.pace),
+                float(s.sleep_hours),
+                float(s.distance_km),
+                float(s.calories),
+                age,
+                height,
+                weight,
             ]
             for s in window
         ]
@@ -118,7 +135,7 @@ def finetune_user_model(user_id: int, epochs: int = 1):
         print(f"[FINETUNE] User {user_id}: No valid training windows (no target data).")
         return
 
-    X = np.array(X_list, dtype="float32")                       # (num_samples, WINDOW_SIZE, 6)
+    X = np.array(X_list, dtype="float32")                       # (num_samples, WINDOW_SIZE, 9)
     y = np.array(y_list, dtype="float32").reshape(-1, 1)        # (num_samples, 1)
 
     user_model_path = get_user_model_path(user_id)
