@@ -19,12 +19,17 @@ from service.battery_service import (
     compute_acute_fatigue  # ← 전날 피로도 기반 acute fatigue
 )
 
-from service.skill_service import load_user_skill, update_user_skill
+from service.skill_service import (
+    load_user_skill, 
+    update_user_skill,
+    save_user_skill,
+    save_user_profile
+)
+
 from service.recommendation_engine import (
     generate_recommendations,
     generate_beginner_recommendations,
-    save_user_skill,      # 🔥 추가
-    save_user_profile
+    
 )
 
 import json
