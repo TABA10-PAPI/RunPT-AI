@@ -6,6 +6,11 @@ import numpy as np
 
 from config.settings import RUNNING_DIR
 from model.loader import load_user_model
+from service.skill_service import get_user_static_features
+
+WINDOW_SIZE = 7
+FEATURE_DIM = 7  # distance, pace_sec, time_sec, avg_hr, age, height, weight
+
 
 # ---------------------------
 # 날짜 정규화 함수
@@ -41,7 +46,7 @@ def build_daily_records(data: list[dict], today: datetime, days: int = 7):
     for r in data:
         if "date" not in r:
             continue
-        
+
         # 날짜 정규화 적용
         date_str = clean_date(r["date"])
         d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -52,20 +57,20 @@ def build_daily_records(data: list[dict], today: datetime, days: int = 7):
     parsed.sort(key=lambda x: x[0])
 
     # 날짜별 세션 묶기
-    daily_map = {}
+    daily_map: dict = {}
     for d, r in parsed:
         daily_map.setdefault(d, []).append(r)
 
-    # 오늘 기준 7일 생성
-    result = []
+    # 오늘 기준 days일 생성
+    result: list[dict] = []
     for i in range(days):
         day = today.date() - timedelta(days=(days - 1 - i))
         sessions = daily_map.get(day, [])
 
         if sessions:
-            total_dist = sum(s["distance"] for s in sessions)
-            total_time = sum(s["time_sec"] for s in sessions)
-            avg_hr = sum(s["avg_hr"] for s in sessions) / len(sessions)
+            total_dist = sum(s.get("distance", 0.0) for s in sessions)
+            total_time = sum(s.get("time_sec", 0.0) for s in sessions)
+            avg_hr = sum(s.get("avg_hr", 60.0) for s in sessions) / len(sessions)
             pace_sec = total_time / total_dist if total_dist > 0 else 0.0
         else:
             total_dist = 0.0
@@ -75,10 +80,10 @@ def build_daily_records(data: list[dict], today: datetime, days: int = 7):
 
         result.append({
             "date": day.strftime("%Y-%m-%d"),
-            "distance": total_dist,
-            "time_sec": total_time,
-            "avg_hr": avg_hr,
-            "pace_sec": pace_sec
+            "distance": float(total_dist),
+            "time_sec": float(total_time),
+            "avg_hr": float(avg_hr),
+            "pace_sec": float(pace_sec),
         })
 
     return result
@@ -87,19 +92,22 @@ def build_daily_records(data: list[dict], today: datetime, days: int = 7):
 # ---------------------------
 # Feature Extraction
 # ---------------------------
-def extract_features(record):
+def extract_features(record: dict, age: float, height: float, weight: float):
     return [
-        record["distance"],
-        record["pace_sec"],
-        record["time_sec"],
-        record["avg_hr"],
+        float(record["distance"]),
+        float(record["pace_sec"]),
+        float(record["time_sec"]),
+        float(record["avg_hr"]),
+        float(age),
+        float(height),
+        float(weight),
     ]
 
 
 # ---------------------------
 # Domain Logic (규칙 기반)
 # ---------------------------
-def is_hard_run(record):
+def is_hard_run(record: dict | None):
     if not record:
         return False
 
@@ -109,13 +117,13 @@ def is_hard_run(record):
         return True
     if record.get("new_record", False):
         return True
-    if record["distance"] >= 18:
+    if record.get("distance", 0.0) >= 18:
         return True
 
     return False
 
 
-def compute_rest_days_daily(daily):
+def compute_rest_days_daily(daily: list[dict]) -> int:
     cnt = 0
     for r in reversed(daily):
         if r["distance"] == 0:
@@ -125,38 +133,42 @@ def compute_rest_days_daily(daily):
     return cnt
 
 
-def compute_daily_fatigue(daily):
+def compute_daily_fatigue(daily: list[dict]) -> float:
     loads = []
     for r in daily:
-        load = (r["distance"] * 0.4) + ((r["avg_hr"] / 200) * 0.6)
+        load = (r["distance"] * 0.4) + ((r["avg_hr"] / 200.0) * 0.6)
         loads.append(load)
 
-    max_val = max(loads) if max(loads) > 0 else 1
+    max_val = max(loads) if loads and max(loads) > 0 else 1.0
     fatigue = sum(loads) / (len(loads) * max_val)
 
     return max(0.0, min(1.0, fatigue))
 
 
-def adjust_battery(raw, had_hard_run, rest_days, fatigue):
+def adjust_battery(raw: float, had_hard_run: bool, rest_days: int, fatigue: float) -> float:
     battery = raw
 
+    # 모델이 너무 낮게 준 경우, 최근에 빡센 런이 없으면 최소 방어선
     if not had_hard_run and battery < 40:
         battery = 40.0
 
+    # 휴식 1일 이상
     if rest_days >= 1:
         if fatigue < 0.7 and battery < 70:
             battery = 70.0
         elif fatigue < 0.85 and battery < 60:
             battery = 60.0
 
+    # 휴식 2일 이상
     if rest_days >= 2:
         if fatigue < 0.5:
-            battery = max(battery, 95)
+            battery = max(battery, 95.0)
         else:
-            battery = max(battery, 90)
+            battery = max(battery, 90.0)
 
-    battery += 5
-    battery = max(0, min(100, battery))
+    # 최종 보정
+    battery += 5.0
+    battery = max(0.0, min(100.0, battery))
     return round(battery, 2)
 
 
@@ -171,14 +183,23 @@ def predict_battery(user_id: int, date_str: str):
     today = datetime.strptime(clean_date(date_str), "%Y-%m-%d")
 
     # 최근 7일 요약 생성
-    daily = build_daily_records(data, today, days=7)
+    daily = build_daily_records(data, today, days=WINDOW_SIZE)
 
-    features = np.array([extract_features(r) for r in daily])
-    features = features.reshape(1, 7, 4)
+    # 🔥 유저 정적 특성(나이/키/몸무게) 로드
+    static = get_user_static_features(user_id)
+    age = static["age"]
+    height = static["height"]
+    weight = static["weight"]
+
+    # LSTM 입력 (1, 7, 7) = (batch, time, feature_dim)
+    features = np.array(
+        [extract_features(r, age, height, weight) for r in daily],
+        dtype="float32"
+    ).reshape(1, WINDOW_SIZE, FEATURE_DIM)
 
     model = load_user_model(user_id)
-    raw_score = model.predict(features)[0][0]
-    raw_battery = raw_score * 100
+    raw_score = float(model.predict(features)[0][0])
+    raw_battery = raw_score * 100.0
 
     yesterday_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -245,14 +266,15 @@ def explain_battery_score(battery: float, rest_days: int, fatigue: float, had_ha
 
     return reason_text, feedback
 
-def compute_acute_fatigue(latest_run):
+
+def compute_acute_fatigue(latest_run: dict | None) -> float:
     """전날 러닝 기반 단기 피로도 계산"""
     if latest_run is None:
         return 0.1  # 휴식일 → 피로도 매우 낮음
 
-    dist = latest_run["distance"]
-    hr = latest_run["avg_hr"]
-    pace = latest_run["pace_sec"]
+    dist = latest_run.get("distance", 0.0)
+    hr = latest_run.get("avg_hr", 120.0)
+    pace = latest_run.get("pace_sec", 360.0)
 
     # 기본 피로도
     fatigue = 0.1
@@ -277,18 +299,17 @@ def compute_acute_fatigue(latest_run):
 
     return min(1.0, fatigue)
 
+
 def apply_rest_decay_weighted(daily: list[dict], fatigue: float) -> float:
     """
     각 휴식일의 '최근일수 가중치' 기반 피로도 감소
     daily: 최근 7일 (0: 가장 오래전, 6: 오늘)
     """
-
     rest_effect = 0.0
 
     # daily[-1] = 오늘
     # daily[-2] = 전날
     # daily[-3] = 2일 전 ...
-
     for idx in range(1, len(daily) + 1):
         day_ago = idx
         day_record = daily[-day_ago]
