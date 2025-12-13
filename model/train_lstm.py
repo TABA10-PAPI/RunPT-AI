@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Tuple
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
+from tensorflow.keras.callbacks import EarlyStopping
 
 from config.settings import BASE_MODEL_PATH, RUNNING_DIR
 from service.skill_service import get_user_static_features
@@ -269,18 +270,43 @@ def train_sample_lstm():
         X = np.random.rand(200, WINDOW_SIZE, FEATURE_DIM).astype("float32")
         y = np.random.rand(200, 1).astype("float32")
 
-    # 모델 정의
+    # ---------------------------
+    # 모델 정의 (확장)
+    # ---------------------------
     model = tf.keras.Sequential([
         layers.Input(shape=(WINDOW_SIZE, FEATURE_DIM)),
-        layers.LSTM(32, return_sequences=False),
-        layers.Dense(16, activation="relu"),
+        layers.LSTM(64, return_sequences=False),   # 32 → 64로 확대
+        layers.Dense(32, activation="relu"),       # 16 → 32로 확대
         layers.Dense(1, activation="sigmoid")
     ])
 
-    model.compile(optimizer="adam", loss="mse")
-    model.fit(X, y, epochs=5, batch_size=16)
-    model.save(BASE_MODEL_PATH)
+    # MAE 메트릭 + MSE 손실
+    model.compile(optimizer="adam", loss="mse", metrics=["mae"])
 
+    # EarlyStopping 콜백 설정
+    early_stop = EarlyStopping(
+        monitor="val_loss",
+        patience=5,
+        restore_best_weights=True
+    )
+
+    # 학습 (validation_split + EarlyStopping 적용)
+    history = model.fit(
+        X,
+        y,
+        epochs=100,             # 5 → 50으로 증가
+        batch_size=16,
+        validation_split=0.2,  # 8:2로 train/valid 분리
+        callbacks=[early_stop],
+        verbose=1,
+    )
+
+    # 마지막 loss/val_loss 로그 찍어주기 (디버깅용)
+    final_loss = history.history["loss"][-1]
+    final_val_loss = history.history["val_loss"][-1]
+    print(f"[TRAIN] Final loss={final_loss:.4f}, val_loss={final_val_loss:.4f}")
+
+    model.save(BASE_MODEL_PATH)
     print(f"[TRAIN] Saved model to {BASE_MODEL_PATH}")
 
 
