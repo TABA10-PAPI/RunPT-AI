@@ -6,7 +6,8 @@ from typing import Optional, List, Dict, Tuple
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Input, LSTM, Dense, Bidirectional
 from tensorflow.keras.callbacks import EarlyStopping
 
 from config.settings import BASE_MODEL_PATH, RUNNING_DIR
@@ -273,11 +274,16 @@ def train_sample_lstm():
     # ---------------------------
     # 모델 정의 (확장)
     # ---------------------------
-    model = tf.keras.Sequential([
-        layers.Input(shape=(WINDOW_SIZE, FEATURE_DIM)),
-        layers.LSTM(64, return_sequences=False),   # 32 → 64로 확대
-        layers.Dense(32, activation="relu"),       # 16 → 32로 확대
-        layers.Dense(1, activation="sigmoid")
+    # Bidirectional과 Sigmoid를 결합한 모델
+    model = Sequential([
+        # 1. Bidirectional LSTM으로 시퀀스 특징 추출
+        Bidirectional(LSTM(64, activation='tanh'), input_shape=(WINDOW_SIZE, FEATURE_DIM)),
+        
+        # 2. Dense Layer로 특징 변환
+        Dense(32, activation="relu"),
+        
+        # 3. Sigmoid로 출력 값을 0~1 사이로 제한
+        Dense(1, activation="sigmoid") 
     ])
 
     # MAE 메트릭 + MSE 손실
@@ -295,7 +301,7 @@ def train_sample_lstm():
         X,
         y,
         epochs=100,             # 5 → 50으로 증가
-        batch_size=16,
+        batch_size=8,
         validation_split=0.2,  # 8:2로 train/valid 분리
         callbacks=[early_stop],
         verbose=1,
