@@ -61,7 +61,7 @@ def _compute_battery_and_recommendations(req: BatteryRequest):
     skill = load_user_skill(user_id)
 
     # ----------------------------
-    # 🔥 전날 러닝 기록 가져오기
+    # 전날 러닝 기록 가져오기
     # ----------------------------
     yesterday = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
     yesterday_session = None
@@ -71,7 +71,7 @@ def _compute_battery_and_recommendations(req: BatteryRequest):
             break
 
     # ----------------------------
-    # 🔥 acute fatigue 계산
+    # acute fatigue 계산
     # ----------------------------
     acute_fatigue = compute_acute_fatigue(yesterday_session)
 
